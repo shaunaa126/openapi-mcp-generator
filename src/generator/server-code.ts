@@ -60,8 +60,9 @@ export function generateMcpServerCode(
     case 'streamable-http':
       transportImport = `\nimport { setupStreamableHttpServer } from "./streamable-http.js";`;
       transportCode = `// Set up StreamableHTTP transport
+  // Each session will get its own server instance with configured handlers
   try {
-    await setupStreamableHttpServer(server, ${options.port || 3000});
+    await setupStreamableHttpServer(${options.port || 3000});
   } catch (error) {
     console.error("Error setting up StreamableHTTP server:", error);
     process.exit(1);
@@ -158,6 +159,44 @@ const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, 
 
 ${listToolsHandlerCode}
 ${callToolHandlerCode}
+
+
+
+/**
+ * Creates a new Server instance with all handlers configured
+ * This is needed for StreamableHTTP where each session requires its own server instance
+ * 
+ * @returns Configured MCP Server instance
+ */
+export function createConfiguredServer(): Server {
+  const newServer = new Server(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: {} } }
+  );
+
+  newServer.setRequestHandler(ListToolsRequestSchema, async () => {
+    const toolsForClient: Tool[] = Array.from(toolDefinitionMap.values()).map(def => ({
+      name: def.name,
+      description: def.description,
+      inputSchema: def.inputSchema
+    }));
+    return { tools: toolsForClient };
+  });
+
+  newServer.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest, extra: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<CallToolResult> => {
+    const { name: toolName, arguments: toolArgs } = request.params;
+    const toolDefinition = toolDefinitionMap.get(toolName);
+    if (!toolDefinition) {
+      console.error(\`Error: Unknown tool requested: \${toolName}\`);
+      return { content: [{ type: "text", text: \`Error: Unknown tool requested: \${toolName}\` }] };
+    }
+    let sessionHeaders = ${options.passthroughAuth ? 'extra.requestInfo?.headers' : 'undefined'};
+    return await executeApiTool(toolName, toolDefinition, toolArgs ?? {}, securitySchemes, sessionHeaders);
+  });
+
+  return newServer;
+}
+
 ${executeApiToolFunctionCode}
 
 /**

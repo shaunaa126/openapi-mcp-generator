@@ -22,8 +22,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InitializeRequestSchema, JSONRPCError } from "@modelcontextprotocol/sdk/types.js";
 import { toReqRes, toFetchResponse } from 'fetch-to-node';
 
-// Import server configuration constants
-import { SERVER_NAME, SERVER_VERSION } from './index.js';
+// Import server configuration constants and factory
+import { SERVER_NAME, SERVER_VERSION, createConfiguredServer } from './index.js';
 
 // Constants
 const SESSION_ID_HEADER_NAME = "mcp-session-id";
@@ -33,12 +33,11 @@ const JSON_RPC = "2.0";
  * StreamableHTTP MCP Server handler
  */
 class MCPStreamableHttpServer {
-  server: Server;
-  // Store active transports by session ID
-  transports: {[sessionId: string]: StreamableHTTPServerTransport} = {};
+  // Store active transports and their servers by session ID
+  sessions: {[sessionId: string]: { transport: StreamableHTTPServerTransport, server: Server }} = {};
   
-  constructor(server: Server) {
-    this.server = server;
+  constructor() {
+    // No longer need a single server instance
   }
   
   /**
@@ -64,9 +63,9 @@ class MCPStreamableHttpServer {
       // Convert Fetch Request to Node.js req/res
       const { req, res } = toReqRes(c.req.raw);
       
-      // Reuse existing transport if we have a session ID
-      if (sessionId && this.transports[sessionId]) {
-        const transport = this.transports[sessionId];
+      // Reuse existing session if we have a session ID
+      if (sessionId && this.sessions[sessionId]) {
+        const { transport } = this.sessions[sessionId];
         
         // Handle the request with the transport
         await transport.handleRequest(req, res, body);
@@ -80,35 +79,40 @@ class MCPStreamableHttpServer {
         return toFetchResponse(res);
       }
       
-      // Create new transport for initialize requests
+      // Create new session for initialize requests
       if (!sessionId && this.isInitializeRequest(body)) {
-        console.error("Creating new StreamableHTTP transport for initialize request");
+        console.error("Creating new session with transport and server");
         
+        // Create a new transport for this session
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => uuid(),
         });
+        
+        // Create a new server instance for this session
+        const server = createConfiguredServer();
         
         // Add error handler for debug purposes
         transport.onerror = (err) => {
           console.error('StreamableHTTP transport error:', err);
         };
         
-        // Connect the transport to the MCP server
-        await this.server.connect(transport);
+        // Connect the server to this transport
+        await server.connect(transport);
+        console.error("Server connected to transport");
         
         // Handle the request with the transport
         await transport.handleRequest(req, res, body);
         
-        // Store the transport if we have a session ID
+        // Store the session if we have a session ID
         const newSessionId = transport.sessionId;
         if (newSessionId) {
           console.error(\`New session established: \${newSessionId}\`);
-          this.transports[newSessionId] = transport;
+          this.sessions[newSessionId] = { transport, server };
           
           // Set up clean-up for when the transport is closed
           transport.onclose = () => {
             console.error(\`Session closed: \${newSessionId}\`);
-            delete this.transports[newSessionId];
+            delete this.sessions[newSessionId];
           };
         }
         
@@ -168,20 +172,20 @@ class MCPStreamableHttpServer {
 
 /**
  * Sets up a web server for the MCP server using StreamableHTTP transport
+ * Each session gets its own Server instance with configured handlers
  * 
- * @param server The MCP Server instance
  * @param port The port to listen on (default: ${port})
  * @returns The Hono app instance
  */
-export async function setupStreamableHttpServer(server: Server, port = ${port}) {
+export async function setupStreamableHttpServer(port = ${port}) {
   // Create Hono app
   const app = new Hono();
   
   // Enable CORS
   app.use('*', cors());
   
-  // Create MCP handler
-  const mcpHandler = new MCPStreamableHttpServer(server);
+  // Create MCP handler (no longer needs a server instance)
+  const mcpHandler = new MCPStreamableHttpServer();
   
   // Add a simple health check endpoint
   app.get('/health', (c) => {
