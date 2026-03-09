@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CLI option `--passthrough-auth` to forward authentication headers from MCP requests to the downstream API, per the OpenAPI security scheme. Supports http (bearer/basic), apiKey (header/query/cookie), and OpenID Connect bearer tokens. Works for SSE and StreamableHTTP transports. Requires `@modelcontextprotocol/sdk` ^1.17.4.
 
+### Fixed
+
+- Passthrough-auth now correctly forwards auth headers when the OpenAPI spec has no formal `securitySchemes` or `security` declarations. Previously, the `Authorization` header sent by the MCP client was silently dropped before the downstream API call in this case. The fix adds a fallback that unconditionally forwards `Authorization`, `X-API-Key`, `API-Key`, and `X-Auth-*` headers — covering APIs that enforce auth at the gateway/proxy level without documenting it in the spec.
+
 
 ## [3.2.0] - 2025-08-24
 
