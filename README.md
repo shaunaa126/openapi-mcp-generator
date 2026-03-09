@@ -59,7 +59,7 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--port`             | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
 | `--default-include`  |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
 | `--force`            |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
-| `--passthrough-auth` |       | Forward auth headers in MCP requests to the downstream API, as specified by the OpenAPI spec.                                                    | `false`                           |
+| `--passthrough-auth` |       | Forward auth headers from MCP client requests to the downstream API. Honors OpenAPI security scheme declarations when present; falls back to forwarding `Authorization`, `X-API-Key`, `API-Key`, and `X-Auth-*` headers unconditionally when the spec has no security declarations. Only applies to `web` and `streamable-http` transports. | `false`                           |
 
 ## 📦 Programmatic API
 
@@ -174,28 +174,49 @@ Configure auth credentials in your environment:
 
 ## 🔐 Pass-through Headers for Authentication
 
-Use the CLI option `--passthrough-auth` to have the server pass-through client auth headers to the downstream API. The headers forwarded are for the auth schemes defined in the OpenAPI spec. Scheme types http (bearer or basic), apiKey (header, query param, or cookie), and openIdConnect bearer tokens are supported.
+Use the CLI option `--passthrough-auth` to have the server forward client auth headers directly to the downstream API, without requiring credentials in environment variables.
 
-The client should configure the auth credentials to be sent, for example:
+### How it works
 
-```
+When `--passthrough-auth` is enabled, the generated server reads auth headers from the incoming MCP request and forwards them to the downstream API. Two resolution strategies are applied in order:
+
+1. **Scheme-based forwarding** — When the OpenAPI spec declares `securitySchemes` and operations include `security` requirements, the server matches the appropriate scheme (Bearer, Basic, API key, OAuth2, OpenID Connect) and copies the corresponding header(s) from the MCP client request to the downstream API call.
+
+2. **Fallback forwarding** — When the OpenAPI spec has no formal security declarations (e.g., `securitySchemes` is absent or operations omit `security`), the server still forwards auth headers directly. This covers common real-world cases where APIs enforce auth at the gateway or proxy level but do not document it in the spec:
+   - `Authorization` header (any value — Bearer tokens, Basic auth, etc.)
+   - `X-API-Key` and `API-Key` headers
+   - Any header whose name starts with `X-Auth`
+
+Supported scheme types for scheme-based forwarding: `http` (Bearer or Basic), `apiKey` (header, query param, or cookie), and `openIdConnect` Bearer tokens.
+
+> **Note:** `--passthrough-auth` is only available for the `web` (SSE) and `streamable-http` transports. It has no effect for `stdio`.
+
+### Client configuration
+
+Configure your MCP client to send the auth credentials in request headers:
+
+```json
 "mcpServers": {
-      "my-api": {
-        "transport": "HTTP",
-        "url": "http://localhost:3000/sse",
-        "headers": {
-          "Authorization": "Bearer MY_TOKEN"
-        }
-      },
-      "my-other-api": {
-        "transport": "Streamable-HTTP",
-        "url": "http://localhost:4000/mcp",
-        "headers": {
-          "X-API-Key": "MY_API_KEY"
-        }
-      },
+  "my-api": {
+    "transport": "HTTP",
+    "url": "http://localhost:3000/sse",
+    "headers": {
+      "Authorization": "Bearer MY_TOKEN"
+    }
+  },
+  "my-other-api": {
+    "transport": "Streamable-HTTP",
+    "url": "http://localhost:4000/mcp",
+    "headers": {
+      "X-API-Key": "MY_API_KEY"
+    }
+  }
 }
 ```
+
+### Precedence
+
+When both passthrough headers and environment-variable credentials are present, **passthrough headers take priority** for scheme-based forwarding. Environment variables are used as a fallback for schemes that have no matching passthrough header.
 
 ---
 

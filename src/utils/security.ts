@@ -198,10 +198,12 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
  * Generates code for executing API tools with security handling
  *
  * @param securitySchemes Security schemes from OpenAPI spec
+ * @param passthroughAuth Whether passthrough auth is enabled
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  passthroughAuth?: boolean
 ): string {
   // Generate OAuth2 token acquisition function
   const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode();
@@ -380,6 +382,30 @@ export function generateExecuteApiToolFunction(
             
         console.warn(\`Tool '\${toolName}' requires security: \${securityRequirementsString}, but no suitable credentials found.\`);
     }
+    ${passthroughAuth ? `
+    // Passthrough-auth fallback: forward any auth headers present in the session
+    // when no security scheme matched (e.g. API has no formal security declarations).
+    if (sessionHeaders && !headers['authorization']) {
+        const passthroughAuthorizationHeader = getHeaderValue(sessionHeaders, 'authorization');
+        if (passthroughAuthorizationHeader) {
+            headers['authorization'] = passthroughAuthorizationHeader;
+            console.error('Applied authorization header from passthrough session headers (fallback)');
+        }
+    }
+    if (sessionHeaders) {
+        // Forward well-known API key header names that may not be in the security schemes
+        for (const [key, value] of Object.entries(sessionHeaders)) {
+            const lowerKey = key.toLowerCase();
+            if (
+                !headers[lowerKey] &&
+                (lowerKey === 'x-api-key' || lowerKey === 'api-key' || lowerKey.startsWith('x-auth'))
+            ) {
+                headers[lowerKey] = Array.isArray(value) ? value[0]! : (value ?? '');
+                console.error(\`Applied passthrough header '\${lowerKey}' (fallback)\`);
+            }
+        }
+    }
+    ` : ''}
     `;
 
   // Generate complete execute API tool function
